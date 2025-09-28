@@ -10,8 +10,10 @@ import argparse
 
 
 def build_loss(neural_net, optimizing_img, target_representations, content_feature_maps_index, style_feature_maps_indices, config):
+    alpha=config['alpha']
     target_content_representation = target_representations[0]
-    target_style_representation = target_representations[1]
+    target_style_representation1 = target_representations[1]
+    target_style_representation2 = target_representations[2]
 
     current_set_of_feature_maps = neural_net(optimizing_img)
 
@@ -20,9 +22,11 @@ def build_loss(neural_net, optimizing_img, target_representations, content_featu
 
     style_loss = 0.0
     current_style_representation = [utils.gram_matrix(x) for cnt, x in enumerate(current_set_of_feature_maps) if cnt in style_feature_maps_indices]
-    for gram_gt, gram_hat in zip(target_style_representation, current_style_representation):
-        style_loss += torch.nn.MSELoss(reduction='sum')(gram_gt[0], gram_hat[0])
-    style_loss /= len(target_style_representation)
+    for gram_gt, gram_hat in zip(target_style_representation1, current_style_representation):
+        style_loss += alpha*torch.nn.MSELoss(reduction='sum')(gram_gt[0], gram_hat[0])
+    for gram_gt, gram_hat in zip(target_style_representation2, current_style_representation):
+        style_loss += (1-alpha)*torch.nn.MSELoss(reduction='sum')(gram_gt[0], gram_hat[0])
+    style_loss /= len(target_style_representation1+target_style_representation2)
     # print(f"len(target_style_representation): {len(target_style_representation)}")
     # print(f"Shape of gram_gt[0] is {gram_gt[0].shape}")
     tv_loss = utils.total_variation(optimizing_img)
@@ -49,9 +53,11 @@ def make_tuning_step(neural_net, optimizer, target_representations, content_feat
 
 def neural_style_transfer(config):
     content_img_path = os.path.join(config['content_images_dir'], config['content_img_name'])
-    style_img_path = os.path.join(config['style_images_dir'], config['style_img_name'])
+    style_img_path1 = os.path.join(config['style_images_dir'], config['first_style_img_name'])
+    style_img_path2 = os.path.join(config['style_images_dir'], config['second_style_img_name'])
+    alpha=config['alpha']
 
-    out_dir_name = 'combined_' + os.path.split(content_img_path)[1].split('.')[0] + '_' + os.path.split(style_img_path)[1].split('.')[0]
+    out_dir_name = 'combined_' + os.path.split(content_img_path)[1].split('.')[0] + '_' + os.path.split(style_img_path1)[1].split('.')[0] + '_' + os.path.split(style_img_path2)[1].split('.')[0] + '_' +f"alpha-{config['alpha']*100:.0f}"
     dump_path = os.path.join(config['output_img_dir'], out_dir_name)
     os.makedirs(dump_path, exist_ok=True)
 
@@ -59,7 +65,8 @@ def neural_style_transfer(config):
     print(f"Using device : {device}")
 
     content_img = utils.prepare_img(content_img_path, config['height'], device)
-    style_img = utils.prepare_img(style_img_path, config['height'], device)
+    style_img1 = utils.prepare_img(style_img_path1, config['height'], device)
+    style_img2 = utils.prepare_img(style_img_path2, config['height'], device)
 
     if config['init_method'] == 'random':
         # white_noise_img = np.random.uniform(-90., 90., content_img.shape).astype(np.float32)
@@ -70,8 +77,9 @@ def neural_style_transfer(config):
     else:
         # init image has same dimension as content image - this is a hard constraint
         # feature maps need to be of same size for content image and init image
-        style_img_resized = utils.prepare_img(style_img_path, np.asarray(content_img.shape[2:]), device)
-        init_img = style_img_resized
+        style_img_resized1 = utils.prepare_img(style_img_path1, np.asarray(content_img.shape[2:]), device)
+        style_img_resized2 = utils.prepare_img(style_img_path2, np.asarray(content_img.shape[2:]), device)
+        init_img = style_img_resized1*alpha+style_img_resized2*(1-alpha)
 
     # we are tuning optimizing_img's pixels! (that's why requires_grad=True)
     optimizing_img = Variable(init_img, requires_grad=True)
@@ -82,16 +90,17 @@ def neural_style_transfer(config):
 
     # neural_net(img) gives ouput of the like vgg_outputs(relu1_2, relu2_2, relu3_3, relu4_3) which are the feature maps from the models at different level for example after layer 4, 9 etc
     content_img_set_of_feature_maps = neural_net(content_img)
-    style_img_set_of_feature_maps = neural_net(style_img)
-    
+    style_img_set_of_feature_maps1 = neural_net(style_img1)
+    style_img_set_of_feature_maps2 = neural_net(style_img2)
     ####################################################################################################################################################################
     # content_feature_maps_index_name[0]=1 in general it tell which feature map to use in the as the content in this case the feature map 1 is used for the content 
     # style_feature_maps_indices_names[0]] tells in general all the feature maps that is to be used for replicating the style from the style image to the content images
     ####################################################################################################################################################################
     
     target_content_representation = content_img_set_of_feature_maps[content_feature_maps_index_name[0]].squeeze(axis=0)
-    target_style_representation = [utils.gram_matrix(x) for cnt, x in enumerate(style_img_set_of_feature_maps) if cnt in style_feature_maps_indices_names[0]]
-    target_representations = [target_content_representation, target_style_representation]
+    target_style_representation1 = [utils.gram_matrix(x) for cnt, x in enumerate(style_img_set_of_feature_maps1) if cnt in style_feature_maps_indices_names[0]]
+    target_style_representation2 = [utils.gram_matrix(x) for cnt, x in enumerate(style_img_set_of_feature_maps2) if cnt in style_feature_maps_indices_names[0]]
+    target_representations = [target_content_representation, target_style_representation1, target_style_representation2]
 
     # magic numbers in general are a big no no - some things in this code are left like this by design to avoid clutter
     num_of_iterations = {
@@ -151,17 +160,19 @@ if __name__ == "__main__":
     
     parser = argparse.ArgumentParser()
     parser.add_argument("--content_img_name", type=str, help="content image name", default='figures.jpg')
-    parser.add_argument("--style_img_name", type=str, help="style image name", default='vg_starry_night.jpg')
+    parser.add_argument("--first_style_img_name", type=str, help="style image name", default='wave_crop.jpg')
     parser.add_argument("--height", type=int, help="height of content and style images", default=400)
 
     parser.add_argument("--content_weight", type=float, help="weight factor for content loss", default=1e6)
-    parser.add_argument("--style_weight", type=float, help="weight factor for style loss", default=1e4)
-    parser.add_argument("--tv_weight", type=float, help="weight factor for total variation loss", default=1e2)
+    parser.add_argument("--style_weight", type=float, help="weight factor for style loss", default=2e4)
+    parser.add_argument("--tv_weight", type=float, help="weight factor for total variation loss", default=1e3)
+    parser.add_argument("--second_style_img_name", type=str, help="2nd style image name",default="edtaonisl.jpg")
 
     parser.add_argument("--optimizer", type=str, choices=['lbfgs', 'adam'], default='adam')
     parser.add_argument("--model", type=str, choices=['vgg16', 'vgg19'], default='vgg19')
     parser.add_argument("--init_method", type=str, choices=['random', 'content', 'style'], default='content')
-    parser.add_argument("--saving_freq", type=int, help="saving frequency for intermediate images (-1 means only final)", default=1)
+    parser.add_argument("--saving_freq", type=int, help="saving frequency for intermediate images (-1 means only final)", default=-1)
+    parser.add_argument("--alpha",type=float,help="Float value between 0 and 1 indicating the weight to give to each style", default=0.6)
     args = parser.parse_args()
 
     # some values of weights that worked for figures.jpg, vg_starry_night.jpg (starting point for finding good images)

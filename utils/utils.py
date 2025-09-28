@@ -60,7 +60,7 @@ def save_image(img, img_path):
 
 
 def generate_out_img_name(config):
-    prefix = os.path.basename(config['content_img_name']).split('.')[0] + '_' + os.path.basename(config['style_img_name']).split('.')[0]
+    prefix = os.path.basename(config['content_img_name']).split('.')[0] + '_' + os.path.basename(config['first_style_img_name']).split('.')[0] + '_' + os.path.basename(config['second_style_img_name']).split('.')[0] + '_alpha' + f"{config['alpha']} "
     # called from the reconstruction script
     if 'reconstruct_script' in config:
         suffix = f'_o_{config["optimizer"]}_h_{str(config["height"])}_m_{config["model"]}{config["img_format"][1]}'
